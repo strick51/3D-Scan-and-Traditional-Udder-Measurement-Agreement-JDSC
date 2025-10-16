@@ -1,0 +1,1337 @@
+---
+title: "TECHNICAL NOTE: Agreement and reliability of dairy cow udder morphometrics between traditional measurements and measurements from a 3D scanner"
+---
+
+#load packages
+```{r}
+library(tidyverse)
+library(blandr)
+library(irr)
+library(goftest)
+library(olsrr)
+```
+
+#read in data
+```{r}
+#measurements collected from 3D images using 3-Matic Software
+udder3d <- read_csv("Appendix File 2.csv")
+#exported cow events from farm's herd management software
+health <- read_csv("Appendix File 3.csv")
+#combined traditional measurements collected with measuring tape
+measures <- read_csv("Appendix File 4.csv")
+#test day information on individual cow milk quality
+tday <- read_csv("Appendix File 5.csv")
+```
+
+
+#summarizing cow milk quality 
+```{r}
+#evaluating cows available for enrollment
+tday1 <- tday %>%
+  filter(EART %in% c(5245, 
+                     5246, 
+                     5277, 
+                     5370, 
+                     5387, 
+                     5389,
+                     5437,
+                     5451,
+                     5465, 
+                     5475,
+                     5531,
+                     5532, 
+                     5543, 
+                     5554, 
+                     5561, 
+                     5568, 
+                     5577, 
+                     5590, 
+                     5604, 
+                     5684, 
+                     5753, 
+                     5769, 
+                     5837, 
+                     5913, 
+                     5915, 
+                     5929, 
+                     5933,
+                     5936,
+                     5937, 
+                     5938, 
+                     5940, 
+                     5941, 
+                     5942, 
+                     5943, 
+                     5944, 
+                     5945, 
+                     5946, 
+                     5948, 
+                     5955, 
+                     5960, 
+                     5971, 
+                     5977, 
+                     86245)) 
+
+#filtering out cows excluded from study to summarize pre-study milk quality
+tday1_sum <- tday1 %>%
+  filter(!(EART %in% c(5604, 5684, 5568, 5451, 5936))) %>%
+  summarise(
+    min = min(SCC),
+    max = max(SCC),
+    mean = mean(SCC),
+    median = median(SCC),
+    SD = sd(SCC),
+    SE = SD/sqrt(37)
+  )
+  
+  
+```
+
+
+#wrangle health data to select study cows
+```{r}
+health2 <- health %>%
+  filter(EART %in% c(5245, 
+                     5246, 
+                     5277, 
+                     5370, 
+                     5387, 
+                     5389,
+                     5437, 
+                     5465, 
+                     5475, 
+                     5532, 
+                     5543, 
+                     5554, 
+                     5561, 
+                     5568, 
+                     5577, 
+                     5590, 
+                     5604, 
+                     5684, 
+                     5753, 
+                     5769, 
+                     5837, 
+                     5913, 
+                     5915, 
+                     5929, 
+                     5933,
+                     5937, 
+                     5938, 
+                     5940, 
+                     5941, 
+                     5942, 
+                     5943, 
+                     5944, 
+                     5945, 
+                     5946, 
+                     5948, 
+                     5955, 
+                     5960, 
+                     5971, 
+                     5977, 
+                     86245))
+
+health2 %>%
+  group_by(EART) %>%
+  summarise(
+    ct = n()
+  )
+
+health2 %>%
+  group_by(EvType, SpEvTyp) %>%
+  summarise(
+    ct = n()
+  )
+```
+
+```{r}
+health2 %>%
+  filter(SpEvTyp %in% c("Notes")) %>%
+  group_by(Descr) %>%
+  summarise(
+    n = n()
+  ) %>%
+  ungroup()
+```
+
+```{r}
+enrolled <- health2 %>%
+  filter(EvType %in% c("Enroll in protocol"))
+
+
+ enrolled2 <- enrolled %>%
+  group_by(Descr) %>%
+  summarise(
+    ct = n()
+  ) %>%
+   ungroup()
+ 
+ health_mast <- health2 %>%
+   filter(SpEvTyp %in% c("3 Teat", "CMT", "Enroll in protocol", "Clinical Mastitis", "Fever", "Milk Culture",  "Euthanize", "Spectramast LC"))
+ 
+ health_mast  %>%
+   filter(SpEvTyp %in% c("Enroll in protocol")) %>%
+   group_by(Descr) %>%
+   summarise(
+     ct = n()
+   ) %>%
+   ungroup()
+```
+
+```{r}
+enrolled3 <- enrolled %>%
+  filter(Descr %in% c("Banamine 1d - mast tx dose 1", "Banamine 1d - mast tx dose 2", "Banamine 1d - pain tx related to mast 2RR dose 1", "Excenel 3d - cancelled without completion - mast tx",  "Lidocaine (16ml-50ml) - tblood mamblood mbiop lbiop", "Spectramast 2d", "Spectramast 2d - 3RF mast tx", "Spectramast 2d - cancelled without completion - vet approved 7d course", "Spectramast 2d - vet approved extended 7d course for kleb 1RFmast", "Spectramast 3d - Extended therapy (7d) with spectramast LC. Klebsiella. High producing cow 110# at 118 DIM  not chronic SCC  not lame. Enroll in 3d  2d and 2d treatment for a total of 7d IMM on the RF quarter"))
+
+health_mast2 <- health_mast %>%
+  filter(!(SpEvTyp == "Enroll in protocol")) %>%
+  rbind(enrolled3)
+```
+
+
+
+#wrangle traditional measurements
+```{r}
+measures2 <- measures %>%
+  mutate(
+    ID = as.character(CowID),
+    Right_Quarter = as.numeric(Right_Quarter),
+    DATE = lubridate::mdy(Date),
+    Day = as.character(Study_Day)
+  )
+
+measures3 <- measures2 %>%
+  mutate(
+    measure_ID = paste0(ID, sep = "_", Initials, sep = "_", Day)
+  ) 
+
+```
+
+#filter out sick cows
+```{r}
+#5568 clin mast klebsiella last day of 7 d treat in FR on 12/1
+#5604 LR abnormal milk 12/5 cmt grade 3 - later no growth
+#5684 RR clin mast on 12/1 - no growth 
+
+
+measures4 <- measures3 %>%
+  mutate(
+    obs_day = paste0(Initials, sep = "_", Day)
+  ) %>%
+  filter(!(CowID %in% c("5684", "5604", "5568")))
+
+
+```
+
+#converting 3D measurements from dm to cm and more wrangling
+```{r}
+udder3d_02 <- udder3d %>%
+  mutate(
+    vertical_3d = (Height/10),
+    lt_qt_3d = (LeftAttachedCurve/10),
+    rt_qt_3d = (RightAttachedCurve/10),
+    ID = as.character(CowID),
+    DATE = lubridate::mdy(Date),
+    Study_Day = Day,
+    Day = as.character(Study_Day)
+  ) %>%
+  filter(!(CowID %in% c("5684", "5604", "5568"))) %>%
+  filter(!(CowID == "5277" & Day == 3))
+
+udder3d_03 <- udder3d_02 %>%
+  select(ID, Day, vertical_3d, lt_qt_3d, rt_qt_3d) 
+```
+
+```{r}
+measures5 <- measures4 %>%
+  left_join(udder3d_03) %>%
+  mutate(
+    observer = case_when(
+      Initials == "JS" ~ "a",
+      Initials == "LJ" ~ "b",
+      Initials == "IB" ~ "c",
+      .default = "ERROR"
+    )
+  )
+```
+
+#observer ICCs for vertical
+
+```{r}
+vertical <- measures5 %>%
+ group_by(observer) %>%
+  select(ID, Day, observer, Vertical) %>%
+  pivot_wider(
+    names_from = observer,
+    values_from = Vertical
+  ) %>%
+  ungroup()
+```
+
+#a-b
+
+```{r}
+vertical_ab <- vertical %>%
+  select(a, b)
+
+icc(vertical_ab, model = "twoway", type = "consistency", unit = "average")
+```
+
+#a-c
+
+```{r}
+vertical_ac <- vertical %>%
+  select(a, c)
+
+icc(vertical_ac, model = "twoway", type = "consistency", unit = "average")
+```
+
+#b-c
+
+```{r}
+vertical_bc <- vertical %>%
+  select(b, c)
+
+icc(vertical_bc, model = "twoway", type = "consistency", unit = "average")
+```
+
+#right quarter ICC
+```{r}
+rt_qt <- measures5 %>%
+ group_by(observer) %>%
+  select(ID, Day, observer, Right_Quarter) %>%
+  pivot_wider(
+    names_from = observer,
+    values_from = Right_Quarter
+  ) %>%
+  ungroup()
+```
+
+#a-b
+
+```{r}
+rt_qt_ab <- rt_qt %>%
+  select(a, b)
+
+icc(rt_qt_ab, model = "twoway", type = "consistency", unit = "average")
+```
+
+#a-c
+
+```{r}
+rt_qt_ac <- rt_qt %>%
+  select(a, c)
+
+icc(rt_qt_ac, model = "twoway", type = "consistency", unit = "average")
+```
+
+#b-c
+
+```{r}
+rt_qt_bc <- rt_qt %>%
+  select(b, c)
+
+icc(rt_qt_bc, model = "twoway", type = "consistency", unit = "average")
+```
+
+#left quarter obs icc
+```{r}
+lt_qt <- measures5 %>%
+ group_by(observer) %>%
+  select(ID, Day, observer, Left_Quarter) %>%
+  pivot_wider(
+    names_from = observer,
+    values_from = Left_Quarter
+  ) %>%
+  ungroup()
+```
+
+#a-b
+
+```{r}
+lt_qt_ab <- lt_qt %>%
+  select(a, b)
+
+icc(lt_qt_ab, model = "twoway", type = "consistency", unit = "average")
+```
+
+#a-c
+
+```{r}
+lt_qt_ac <- lt_qt %>%
+  select(a, c)
+
+icc(lt_qt_ac, model = "twoway", type = "consistency", unit = "average")
+```
+
+#b-c
+
+```{r}
+lt_qt_bc <- lt_qt %>%
+  select(b, c)
+
+icc(lt_qt_bc, model = "twoway", type = "consistency", unit = "average")
+```
+
+#observer x 3d ICC
+
+```{r}
+vert_3da <- measures5 %>%
+  filter(Initials == "JS") %>%
+  select(ID, Vertical, vertical_3d)
+
+
+```
+
+```{r}
+vert_3da2 <- vert_3da %>%
+  select(Vertical, vertical_3d)
+
+icc(vert_3da2, model = "twoway", type = "consistency", unit = "average")
+```
+
+```{r}
+blandr.statistics(vert_3da$Vertical, vert_3da$vertical_3d, sig.level = .95)
+```
+
+```{r}
+blandr.draw(vert_3da$Vertical, vert_3da$vertical_3d, sig.level = .95)
+```
+#linear regression analysis
+```{r}
+set.seed(123)
+vab <- agree_reps(y = "Vertical",
+              x = "vertical_3d",
+              id = "ID",
+              data = vert_3da,
+              agree.level = .8)
+
+vert_3da$avg=rowMeans(vert_3da[,c(2,3)])
+vert_3da$diff=vert_3da$Vertical-vert_3da$vertical_3d
+
+mean_diff=mean(vert_3da$diff)
+lower=mean_diff - 1.96*sd(vert_3da$diff)
+upper=mean_diff + 1.96*sd(vert_3da$diff)
+
+summary(lm(diff~avg,vert_3da))
+
+FitModel<-lm(diff~avg,vert_3da)
+shapiro.test(resid(FitModel))
+cvm.test(resid(FitModel))
+ hist(resid(FitModel))
+ qqnorm(resid(FitModel))
+ ols_test_breusch_pagan(FitModel)
+ summary(FitModel)
+plot(diff~avg,vert_3da)
+
+```
+Bias:  -0.1045455 
+Bias- upper 95% CI:  0.3510295 
+Bias- lower 95% CI:  -0.5601204 
+
+Upper limit of agreement:  4.620606 
+Upper LOA- upper 95% CI:  5.401536 
+Upper LOA- lower 95% CI:  3.839677 
+
+Lower limit of agreement:  -4.829697 
+Lower LOA- upper 95% CI:  -4.048768 
+Lower LOA- lower 95% CI:  -5.610626 
+
+#creating blandr plots
+```{r}
+vert_3da3 <- vert_3da %>%
+  mutate(
+  point_color =  case_when(
+     diff >= 4.621 ~ "#E7298A",
+    diff < 4.621 & diff >= -4.83 ~ "black",
+      diff < -4.83 ~ "#E7298A",
+      .default = "NA"
+    )
+  )
+
+VA <- vert_3da3 %>%
+ ggplot(aes(x = avg, y = diff, colour = point_color)) +
+  geom_point(aes(x = avg, y = diff, colour = point_color, size = 1, alpha = 0.75, position = "jitter")) +
+  scale_color_manual(values = vert_3da$point_color, limits = names(vert_3da$point_color)) +
+  geom_smooth(aes(x = avg, y = diff),
+    method="lm",
+    se=FALSE,
+    color = "purple",
+    size = 1.5
+    ) +
+  scale_color_identity(labels = c("Outside of ULOA and LLOA", "Within LOA")) +
+  geom_hline(yintercept = -0.1045455, color = "darkslateblue") +
+  geom_hline(yintercept = 0.3510295,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -0.5601204,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 4.620606, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = 5.401536,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 3.839677 ,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -4.829697, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = -4.048768,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -5.610626,linetype="dotted", color = "darkslateblue") +
+  theme_classic() +
+  ggtitle("Observer A: Vertical") +
+  xlab("Average (cm)") +
+  ylab("Difference (cm)") +
+  guides(alpha = FALSE, size = FALSE) +
+annotate("text", x = 54.5, y = 14, color = "purple", size = 8, family = "Times", label = "y = -0.008x + 0.288; P = 0.84") +
+    theme(
+      plot.title = element_text(size = 24, family = "Times"),
+      axis.title = element_text(size = 20, family = "Times"),
+      axis.text = element_text(size = 16, family = "Times")
+    ) +
+    scale_y_continuous(limits = c(-15, 15))
+```
+#agreement for vertical obs B x 3D
+```{r}
+vert_3db <- measures5 %>%
+  filter(Initials == "LJ")  %>%
+  select(ID, Vertical, vertical_3d)
+```
+
+```{r}
+vert_3db2 <- vert_3db %>%
+  select(Vertical, vertical_3d)
+
+icc(vert_3db2, model = "twoway", type = "consistency", unit = "average")
+```
+
+```{r}
+blandr.statistics(vert_3db$Vertical, vert_3db$vertical_3d, sig.level = .95)
+```
+
+```{r}
+blandr.draw(vert_3db$Vertical, vert_3db$vertical_3d, sig.level = .95)
+```
+#regression analysis
+```{r}
+set.seed(123)
+vab <- agree_reps(y = "Vertical",
+              x = "vertical_3d",
+              id = "ID",
+              data = vert_3db,
+              agree.level = .8)
+
+vert_3db$avg=rowMeans(vert_3db[,c(2,3)])
+vert_3db$diff=vert_3db$Vertical-vert_3db$vertical_3d
+
+mean_diff=mean(vert_3db$diff)
+lower=mean_diff - 1.96*sd(vert_3db$diff)
+upper=mean_diff + 1.96*sd(vert_3db$diff)
+
+summary(lm(diff~avg,vert_3db))
+
+
+FitModel<-lm(diff~avg,vert_3db)
+shapiro.test(resid(FitModel))
+```
+
+Bias:  0.2909091 
+Bias- upper 95% CI:  0.9449505 
+Bias- lower 95% CI:  -0.3631323 
+
+Upper limit of agreement:  7.074523 
+Upper LOA- upper 95% CI:  8.195656 
+Upper LOA- lower 95% CI:  5.95339 
+
+Lower limit of agreement:  -6.492705 
+Lower LOA- upper 95% CI:  -5.371572 
+Lower LOA- lower 95% CI:  -7.613837
+Coefficients:
+            Estimate Std. Error t value Pr(>|t|)  
+(Intercept)  4.98012    2.99717   1.662   0.0995 .
+avg         -0.09690    0.06156  -1.574   0.1184; P = 0.1184
+
+
+#obsB v 3d plot
+```{r}
+vert_3db3 <- vert_3db %>%
+  mutate(
+  point_color =  case_when(
+     diff >= 7.075 ~ "#E7298A",
+    diff < 7.075 & diff >= -6.493 ~ "black",
+      diff < -6.493 ~ "#E7298A",
+      .default = "NA"
+    )
+  )
+
+VB <- vert_3db3 %>%
+ ggplot(aes(x = avg, y = diff, colour = point_color)) +
+  geom_point(aes(x = avg, y = diff, colour = point_color, size = 1, alpha = 0.75, position = "jitter")) +
+  geom_smooth(aes(x = avg, y = diff),
+    method="lm",
+    se=FALSE,
+    color = "purple",
+    size = 1.5
+    ) +
+  scale_color_identity(labels = c("Outside of ULOA and LLOA", "Within LOA")) +
+  geom_hline(yintercept = 0.291, color = "darkslateblue") +
+  geom_hline(yintercept = 0.945,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -0.363,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 7.074523, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = 8.195656,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 5.95339,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -6.492705, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = -5.371572,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -7.613837,linetype="dotted", color = "darkslateblue") +
+  theme_classic() +
+  ggtitle("Observer B: Vertical") +
+  xlab("Average (cm)") +
+  ylab("Difference (cm)") +
+  guides(alpha = FALSE, size = FALSE) + 
+ annotate("text", x = 52.5, y = 15, color = "purple", family = "Times", size = 8, label = "y = -0.09690x + 4.98; P = 0.12") +
+    theme(
+      plot.title = element_text(size = 24, family = "Times"),
+      axis.title = element_text(size = 20, family = "Times"),
+      axis.text = element_text(size = 16, family = "Times")
+    ) +
+   scale_y_continuous(limits = c(-15, 15))
+
+```
+
+#agreement for vert obs c x 3D
+```{r}
+vert_3dc <- measures5 %>%
+  filter(Initials == "IB") %>%
+  select(ID, Day, Vertical, vertical_3d)
+```
+
+```{r}
+vert_3dc2 <- vert_3dc %>%
+  select(Vertical, vertical_3d)
+
+icc(vert_3dc2, model = "twoway", type = "consistency", unit = "average")
+```
+
+```{r}
+set.seed(123)
+vab <- agree_reps(y = "Vertical",
+              x = "vertical_3d",
+              id = "ID",
+              data = vert_3dc,
+              agree.level = .8)
+
+vert_3dc$avg=rowMeans(vert_3dc[,c(3,4)])
+vert_3dc$diff=vert_3dc$Vertical-vert_3dc$vertical_3d
+
+mean_diff=mean(vert_3dc$diff)
+lower=mean_diff - 1.96*sd(vert_3dc$diff)
+upper=mean_diff + 1.96*sd(vert_3dc$diff)
+
+summary(lm(diff~avg,vert_3dc))
+
+FitModel<-lm(diff~avg,vert_3dc)
+shapiro.test(resid(FitModel))
+```
+```{r}
+blandr.statistics(vert_3dc$Vertical, vert_3dc$vertical_3d, sig.level = .95)
+```
+#observer C v 3D
+Bias:  -0.6509091 
+Bias- upper 95% CI:  0.03923977 
+Bias- lower 95% CI:  -1.341058 
+
+Upper limit of agreement:  6.507206 
+Upper LOA- upper 95% CI:  7.690233 
+Upper LOA- lower 95% CI:  5.324179 
+
+Lower limit of agreement:  -7.809024 
+Lower LOA- upper 95% CI:  -6.625997 
+Lower LOA- lower 95% CI:  -8.992051
+
+Coefficients:
+            Estimate Std. Error t value Pr(>|t|)   
+(Intercept) -8.52438    2.67857  -3.182  0.00191 **
+avg          0.16430    0.05545   2.963  0.00375 **
+
+```{r}
+vert_3dc3 <- vert_3dc %>%
+  mutate(
+  point_color =  case_when(
+     diff >= 6.507206 ~ "#E7298A",
+    diff < 6.507206 & diff >= -7.809024 ~ "black",
+      diff < -7.809024 ~ "#E7298A",
+      .default = "NA"
+    )
+  )
+
+VC <- vert_3dc3 %>%
+ ggplot(aes(x = avg, y = diff, colour = point_color)) +
+  geom_point(aes(x = avg, y = diff, colour = point_color, size = 1, alpha = 0.75, position = "jitter")) +
+  geom_smooth(aes(x = avg, y = diff),
+    method="lm",
+    se=FALSE,
+    color = "purple",
+    size = 1.5
+    ) +
+  scale_color_identity(labels = c("Outside of ULOA and LLOA", "Within LOA")) +
+  geom_hline(yintercept = -0.6509091, color = "darkslateblue") +
+  geom_hline(yintercept = 0.03923977,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -1.341058,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 6.507206, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = 7.690233,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 5.324179,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -7.809024, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = -6.625997,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -8.992051,linetype="dotted", color = "darkslateblue") +
+  theme_classic() +
+  ggtitle("Observer C: Vertical") +
+  xlab("Average (cm)") +
+  ylab("Difference (cm)") +
+  guides(alpha = FALSE, size = FALSE) +
+annotate("text", x = 50.5, y = 14, color = "purple", size = 8, family = "Times", label = "y = 0.16430x - 8.52438; P = 0.004") +
+    theme(
+      plot.title = element_text(size = 24, family = "Times"),
+      axis.title = element_text(size = 20, family = "Times"),
+      axis.text = element_text(size = 16, family = "Times")
+    ) +
+  scale_y_continuous(limits = c(-15,15))
+
+ggsave("VC.png", width =7, height = 5, dpi = 300)
+
+```
+
+```{r}
+blandr.draw(vert_3dc$Vertical, vert_3dc$vertical_3d, sig.level = .95)
+```
+
+#left quarter reliability 
+```{r}
+lt_qt_3da <- measures5 %>%
+  filter(Initials == "JS") %>%
+  select(ID, Left_Quarter, lt_qt_3d)
+
+lt_qt_3da2 <- lt_qt_3da %>%
+  select(Left_Quarter, lt_qt_3d)
+
+icc(lt_qt_3da2, model = "twoway", type = "consistency", unit = "average")
+```
+
+#left quarter agreement
+```{r}
+blandr.statistics(lt_qt_3da$Left_Quarter, lt_qt_3da$lt_qt_3d, sig.level = .95)
+```
+
+```{r}
+blandr.draw(lt_qt_3da$Left_Quarter, lt_qt_3da$lt_qt_3d, sig.level = .95)
+```
+
+#linear regression 
+```{r}
+set.seed(123)
+vab <- agree_reps(y = "Left_Quarter",
+              x = "lt_qt_3d",
+              id = "ID",
+              data = lt_qt_3da,
+              agree.level = .8)
+
+lt_qt_3da$avg=rowMeans(lt_qt_3da[,c(2,3)])
+lt_qt_3da$diff=lt_qt_3da$Left_Quarter-lt_qt_3da$lt_qt_3d
+
+mean_diff=mean(lt_qt_3da$diff)
+lower=mean_diff - 1.96*sd(lt_qt_3da$diff)
+upper=mean_diff + 1.96*sd(lt_qt_3da$diff)
+
+summary(lm(diff~avg,lt_qt_3da))
+
+FitModel<-lm(diff~avg,lt_qt_3da)
+shapiro.test(resid(FitModel))
+```
+
+#left quarter obs A
+
+Bias:  0.7512091 
+Bias- upper 95% CI:  1.199699 
+Bias- lower 95% CI:  0.3027187 
+
+Upper limit of agreement:  5.40288 
+Upper LOA- upper 95% CI:  6.171666 
+Upper LOA- lower 95% CI:  4.634095 
+
+Lower limit of agreement:  -3.900462 
+Lower LOA- upper 95% CI:  -3.131677 
+Lower LOA- lower 95% CI:  -4.669247 
+Coefficients:
+            Estimate Std. Error t value Pr(>|t|)
+(Intercept)  1.01647    1.24097   0.819    0.415
+avg         -0.01456    0.06696  -0.217    0.828
+
+```{r}
+lt_qt_3da3 <- lt_qt_3da %>%
+  mutate(
+  point_color =  case_when(
+     diff >= 5.40288 ~ "#E7298A",
+    diff < 5.40288& diff >= -3.900462 ~ "black",
+      diff < -3.900462 ~ "#E7298A",
+      .default = "NA"
+    )
+  )
+
+LA<-  lt_qt_3da3 %>%
+ ggplot(aes(x = avg, y = diff, colour = point_color)) +
+  geom_point(aes(x = avg, y = diff, colour = point_color, size = 1, alpha = 0.75, position = "jitter")) +
+  #scale_color_manual(values = vert_3da$point_color, limits = names(vert_3da$point_color)) +
+  geom_smooth(aes(x = avg, y = diff),
+    method="lm",
+    se=FALSE,
+    color = "purple",
+    size = 1.5
+    ) +
+  scale_color_identity(labels = c("Outside of ULOA and LLOA", "Within LOA")) +
+  geom_hline(yintercept = 0.7512091, color = "darkslateblue") +
+  geom_hline(yintercept =  1.199699,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 0.3027187,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 5.40288, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = 6.1716663,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 4.634095,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -3.900462, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = -3.131677,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -4.669247,linetype="dotted", color = "darkslateblue") +
+  theme_classic() +
+  ggtitle("Observer A: Left Quarter") +
+  xlab("Average (cm)") +
+  ylab("Difference (cm)") +
+  guides(alpha = FALSE, size = FALSE) +
+ annotate("text", x = 20.5, y = 14, color = "purple", size = 8, family = "Times", label = "y = -0.01456x + 1.01647; P = 0.83") +
+    theme(
+      plot.title = element_text(size = 24, family = "Times"),
+      axis.title = element_text(size = 20, family = "Times"),
+      axis.text = element_text(size = 16, family = "Times")
+    ) +
+    scale_y_continuous(limits = c(-15,15))
+
+```
+
+#left quart obs x 3D
+```{r}
+lt_qt_3db <- measures5 %>%
+  filter(Initials == "LJ") %>%
+  select(ID, Day, Left_Quarter, lt_qt_3d)
+
+lt_qt_3db2 <- lt_qt_3db %>%
+  select(Left_Quarter, lt_qt_3d)
+
+icc(lt_qt_3db2, model = "twoway", type = "consistency", unit = "average")
+```
+
+#left quarter agreement
+
+```{r}
+blandr.statistics(lt_qt_3db$Left_Quarter, lt_qt_3db$lt_qt_3d, sig.level = .95)
+```
+
+```{r}
+blandr.draw(lt_qt_3db$Left_Quarter, lt_qt_3db$lt_qt_3d, sig.level = .95)
+```
+
+#linear regression 
+```{r}
+set.seed(123)
+vab <- agree_reps(y = "Left_Quarter",
+              x = "lt_qt_3d",
+              id = "ID",
+              data = lt_qt_3db,
+              agree.level = .8)
+
+lt_qt_3db$avg=rowMeans(lt_qt_3db[,c(3,4)])
+lt_qt_3db$diff=lt_qt_3db$Left_Quarter-lt_qt_3db$lt_qt_3d
+
+mean_diff=mean(lt_qt_3db$diff)
+lower=mean_diff - 1.96*sd(lt_qt_3db$diff)
+upper=mean_diff + 1.96*sd(lt_qt_3db$diff)
+
+summary(lm(diff~avg,lt_qt_3db))
+
+FitModel<-lm(diff~avg,lt_qt_3db)
+shapiro.test(resid(FitModel))
+```
+
+
+#Left Quarter obs b
+Bias:  -0.7915182 
+Bias- upper 95% CI:  -0.3645717 
+Bias- lower 95% CI:  -1.218465 
+
+Upper limit of agreement:  3.636703 
+Upper LOA- upper 95% CI:  4.368558 
+Upper LOA- lower 95% CI:  2.904848 
+
+Lower limit of agreement:  -5.219739 
+Lower LOA- upper 95% CI:  -4.487884 
+Lower LOA- lower 95% CI:  -5.951595
+Coefficients:
+            Estimate Std. Error t value Pr(>|t|)
+(Intercept)  0.68636    1.15514   0.594    0.554
+avg         -0.08470    0.06505  -1.302    0.196
+
+```{r}
+lt_qt_3db3 <- lt_qt_3db %>%
+  mutate(
+  point_color =  case_when(
+     diff >= 3.636703 ~ "#E7298A",
+    diff < 3.636703 & diff >= -5.219739 ~ "black",
+      diff < -5.219739 ~ "#E7298A",
+      .default = "NA"
+    )
+  )
+
+LB <- lt_qt_3db3 %>%
+ ggplot(aes(x = avg, y = diff, colour = point_color)) +
+  geom_point(aes(x = avg, y = diff, colour = point_color, size = 1, alpha = 0.75, position = "jitter")) +
+  geom_smooth(aes(x = avg, y = diff),
+    method="lm",
+    se=FALSE,
+    color = "purple",
+    size = 1.5
+    ) +
+  scale_color_identity(labels = c("Outside of ULOA and LLOA", "Within LOA")) +
+  geom_hline(yintercept = -0.7915182, color = "darkslateblue") +
+  geom_hline(yintercept =  -0.3645717,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -1.218465,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 3.636703, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = 4.36855,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 2.904848,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -5.219739, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = -4.487884,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -5.951595,linetype="dotted", color = "darkslateblue") +
+  theme_classic() +
+  ggtitle("Observer B: Left Quarter") +
+  xlab("Average (cm)") +
+  ylab("Difference (cm)") +
+  guides(alpha = FALSE, size = FALSE) +
+  annotate("text", x = 19.3, y = 14, color = "purple", size = 8, family = "Times", label = "y = -0.08470x + 0.68636; P = 0.20") +
+    theme(
+      plot.title = element_text(size = 24, family = "Times"),
+      axis.title = element_text(size = 20, family = "Times"),
+      axis.text = element_text(size = 16, family = "Times")
+    ) +
+    scale_y_continuous(limits = c(-15,15))
+
+```
+
+#left quarter obs x 3D reliability
+
+```{r}
+lt_qt_3dc <- measures5 %>%
+  filter(Initials == "IB") %>%
+  select(ID, Day, Left_Quarter, lt_qt_3d)
+
+lt_qt_3dc2 <- lt_qt_3dc %>%
+  select(Left_Quarter, lt_qt_3d)
+
+icc(lt_qt_3dc2, model = "twoway", type = "consistency", unit = "average")
+```
+
+#left quarter obs x 3D agreement 
+```{r}
+blandr.statistics(lt_qt_3dc$Left_Quarter, lt_qt_3dc$lt_qt_3d, sig.level = .95)
+```
+
+```{r}
+blandr.draw(lt_qt_3dc$Left_Quarter, lt_qt_3dc$lt_qt_3d, sig.level = .95)
+```
+
+#linear regression 
+```{r}
+set.seed(123)
+vab <- agree_reps(y = "Left_Quarter",
+              x = "lt_qt_3d",
+              id = "ID",
+              data = lt_qt_3dc,
+              agree.level = .8)
+
+lt_qt_3dc$avg=rowMeans(lt_qt_3dc[,c(3,4)])
+lt_qt_3dc$diff=lt_qt_3dc$Left_Quarter-lt_qt_3dc$lt_qt_3d
+
+mean_diff=mean(lt_qt_3dc$diff)
+lower=mean_diff - 1.96*sd(lt_qt_3dc$diff)
+upper=mean_diff + 1.96*sd(lt_qt_3dc$diff)
+
+summary(lm(diff~avg,lt_qt_3dc))
+
+FitModel<-lm(diff~avg,lt_qt_3dc)
+shapiro.test(resid(FitModel))
+```
+
+
+#left quarter obs c
+Bias:  0.4166636 
+Bias- upper 95% CI:  0.8884988 
+Bias- lower 95% CI:  -0.05517154 
+
+Upper limit of agreement:  5.310463 
+Upper LOA- upper 95% CI:  6.119265 
+Upper LOA- lower 95% CI:  4.501662 
+
+Lower limit of agreement:  -4.477136 
+Lower LOA- upper 95% CI:  -3.668334 
+Lower LOA- lower 95% CI:  -5.285938 
+Coefficients:
+            Estimate Std. Error t value Pr(>|t|)
+(Intercept)  0.04294    1.27973   0.034    0.973
+avg          0.02070    0.06964   0.297    0.767
+```{r}
+lt_qt_3dc3 <- lt_qt_3dc %>%
+  mutate(
+  point_color =  case_when(
+     diff >= 5.310463 ~ "#E7298A",
+    diff < 5.310463 & diff >= -4.477136 ~ "black",
+      diff < -4.477136 ~ "#E7298A",
+      .default = "NA"
+    )
+  )
+
+LC <- lt_qt_3dc3 %>%
+ ggplot(aes(x = avg, y = diff, colour = point_color)) +
+  geom_point(aes(x = avg, y = diff, colour = point_color, size = 1, alpha = 0.75, position = "jitter")) +
+  #scale_color_manual(values = vert_3da$point_color, limits = names(vert_3da$point_color)) +
+  geom_smooth(aes(x = avg, y = diff),
+    method="lm",
+    se=FALSE,
+    color = "purple",
+    size = 1.5
+    ) +
+  scale_color_identity(labels = c("Outside of ULOA and LLOA", "Within LOA")) +
+  geom_hline(yintercept = 0.4166636, color = "darkslateblue") +
+  geom_hline(yintercept =  0.8884988,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -0.05517154,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 5.310463, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = 6.119265,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 4.501662,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -4.477136, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = -3.668334,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -5.285938,linetype="dotted", color = "darkslateblue") +
+  theme_classic() +
+  ggtitle("Observer C: Left Quarter") +
+  xlab("Average (cm)") +
+  ylab("Difference (cm)") +
+  guides(alpha = FALSE, size = FALSE) +
+ annotate("text", x = 20, y = 14, color = "purple", size = 8, family = "Times", label = "y = 0.04294x + 0.04294; P = 0.77") +
+    theme(
+      plot.title = element_text(size = 24, family = "Times"),
+      axis.title = element_text(size = 20, family = "Times"),
+      axis.text = element_text(size = 16, family = "Times")
+    ) +
+    scale_y_continuous(limits = c(-15,15))
+
+ggsave("LC.png", width =7, height = 5, dpi = 300)
+```
+
+#right quarter reliability
+```{r}
+rt_qt_3da <- measures5 %>%
+  filter(Initials == "JS") %>%
+  select(ID, Day, Right_Quarter, rt_qt_3d)
+
+```
+
+```{r}
+rt_qt_3da2 <- rt_qt_3da %>%
+  select(Right_Quarter, rt_qt_3d)
+
+icc(rt_qt_3da2, model = "twoway", type = "consistency", unit = "average")
+```
+
+#agreement
+```{r}
+blandr.statistics(rt_qt_3da$Right_Quarter, rt_qt_3da$rt_qt_3d, sig.level = .95)
+```
+
+```{r}
+blandr.draw(rt_qt_3da$Right_Quarter, rt_qt_3da$rt_qt_3d, sig.level = .95)
+```
+#linear regression 
+```{r}
+set.seed(123)
+vab <- agree_reps(y = "Right_Quarter",
+              x = "rt_qt_3d",
+              id = "ID",
+              data = rt_qt_3da,
+              agree.level = .8)
+
+rt_qt_3da$avg=rowMeans(rt_qt_3da[,c(3,4)])
+rt_qt_3da$diff=rt_qt_3da$Right_Quarter-rt_qt_3da$rt_qt_3d
+
+mean_diff=mean(rt_qt_3da$diff)
+lower=mean_diff - 1.96*sd(rt_qt_3da$diff)
+upper=mean_diff + 1.96*sd(rt_qt_3da$diff)
+
+summary(lm(diff~avg,rt_qt_3da))
+
+FitModel<-lm(diff~avg,rt_qt_3da)
+shapiro.test(resid(FitModel))
+```
+
+#right quarter obs a
+Bias:  1.039136 
+Bias- upper 95% CI:  1.44994 
+Bias- lower 95% CI:  0.6283326 
+
+Upper limit of agreement:  5.299928 
+Upper LOA- upper 95% CI:  6.004112 
+Upper LOA- lower 95% CI:  4.595744 
+
+Lower limit of agreement:  -3.221656 
+Lower LOA- upper 95% CI:  -2.517471 
+Lower LOA- lower 95% CI:  -3.92584 
+Coefficients:
+            Estimate Std. Error t value Pr(>|t|)
+(Intercept) -0.57924    1.02497  -0.565    0.573
+avg          0.08500    0.05274   1.612    0.110
+
+```{r}
+rt_qt_3da3 <- rt_qt_3da %>%
+  mutate(
+  point_color =  case_when(
+     diff >= 5.299928 ~ "#E7298A",
+    diff < 5.299928 & diff >= -3.221656 ~ "black",
+      diff < -3.221656~ "#E7298A",
+      .default = "NA"
+    )
+  )
+
+RA<-  rt_qt_3da3 %>%
+ ggplot(aes(x = avg, y = diff, colour = point_color)) +
+  geom_point(aes(x = avg, y = diff, colour = point_color, size = 1, alpha = 0.75, position = "jitter")) +
+  geom_smooth(aes(x = avg, y = diff),
+    method="lm",
+    se=FALSE,
+    color = "purple",
+    size = 1.5
+    ) +
+  scale_color_identity(labels = c("Outside of ULOA and LLOA", "Within LOA")) +
+  geom_hline(yintercept = 1.039136, color = "darkslateblue") +
+  geom_hline(yintercept =  1.44994,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 0.6283326,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 5.299928, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept =  6.004112,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 4.595744,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -3.221656, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = -2.517471,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -3.92584,linetype="dotted", color = "darkslateblue") +
+  theme_classic() +
+  ggtitle("Observer A: Right Quarter") +
+  xlab("Average (cm)") +
+  ylab("Difference (cm)") +
+  guides(alpha = FALSE, size = FALSE) +
+  annotate("text", x = 21.5, y = 14, color = "purple", size = 8, family = "Times", label = "y = 0.08500x - 0.57924; P = 0.11") +
+    theme(
+      plot.title = element_text(size = 24, family = "Times"),
+      axis.title = element_text(size = 20, family = "Times"),
+      axis.text = element_text(size = 16, family = "Times")
+    ) +
+    scale_y_continuous(limits = c(-15,15))
+
+ggsave("RA.png", width =7, height = 5, dpi = 300)
+```
+
+#right quarter reliability
+```{r}
+rt_qt_3db <- measures5 %>%
+  filter(Initials == "LJ") %>%
+  select(ID, Day, Right_Quarter, rt_qt_3d)
+
+rt_qt_3db2 <- rt_qt_3db %>%
+  select(Right_Quarter, rt_qt_3d)
+
+icc(rt_qt_3db2, model = "twoway", type = "consistency", unit = "average")
+```
+
+#right quater agreement
+```{r}
+blandr.statistics(rt_qt_3db$Right_Quarter, rt_qt_3db$rt_qt_3d, sig.level = .95)
+```
+
+```{r}
+blandr.draw(rt_qt_3db$Right_Quarter, rt_qt_3db$rt_qt_3d, sig.level = .95)
+```
+
+#linear regression 
+```{r}
+set.seed(123)
+vab <- agree_reps(y = "Right_Quarter",
+              x = "rt_qt_3d",
+              id = "ID",
+              data = rt_qt_3db,
+              agree.level = .8)
+
+rt_qt_3db$avg=rowMeans(rt_qt_3db[,c(3,4)])
+rt_qt_3db$diff=rt_qt_3db$Right_Quarter-rt_qt_3db$rt_qt_3d
+
+mean_diff=mean(rt_qt_3db$diff)
+lower=mean_diff - 1.96*sd(rt_qt_3db$diff)
+upper=mean_diff + 1.96*sd(rt_qt_3db$diff)
+
+summary(lm(diff~avg,rt_qt_3db))
+
+FitModel<-lm(diff~avg,rt_qt_3db)
+shapiro.test(resid(FitModel))
+```
+#right quarter obs b
+Bias:  -0.5617727 
+Bias- upper 95% CI:  -0.1600283 
+Bias- lower 95% CI:  -0.9635171 
+
+Upper limit of agreement:  3.605057 
+Upper LOA- upper 95% CI:  4.293712 
+Upper LOA- lower 95% CI:  2.916402 
+
+Lower limit of agreement:  -4.728602 
+Lower LOA- upper 95% CI:  -4.039947 
+Lower LOA- lower 95% CI:  -5.417257
+Coefficients:
+            Estimate Std. Error t value Pr(>|t|)
+(Intercept) -1.27212    0.99241  -1.282    0.203
+avg          0.03895    0.05326   0.731    0.466
+
+```{r}
+rt_qt_3db3 <- rt_qt_3db %>%
+  mutate(
+  point_color =  case_when(
+     diff >= 3.605057 ~ "#E7298A",
+    diff < 3.605057 & diff >= -4.728602 ~ "black",
+      diff < -4.728602 ~ "#E7298A",
+      .default = "NA"
+    )
+  )
+
+RB <-  rt_qt_3db3 %>%
+ ggplot(aes(x = avg, y = diff, colour = point_color)) +
+  geom_point(aes(x = avg, y = diff, colour = point_color, size = 1, alpha = 0.75, position = "jitter")) +
+  geom_smooth(aes(x = avg, y = diff),
+    method="lm",
+    se=FALSE,
+    color = "purple",
+    size = 1.5
+    ) +
+  scale_color_identity(labels = c("Outside of ULOA and LLOA", "Within LOA")) +
+  geom_hline(yintercept = -0.5617727, color = "darkslateblue") +
+  geom_hline(yintercept =  -0.1600283,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -0.9635171,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 3.605057, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept =  4.293712,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 2.916402,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -4.728602, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = -4.039947,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -5.417257,linetype="dotted", color = "darkslateblue") +
+  theme_classic() +
+  ggtitle("Observer B: Right Quarter") +
+  xlab("Average (cm)") +
+  ylab("Difference (cm)") +
+  guides(alpha = FALSE, size = FALSE) +
+  annotate("text", x = 21.5, y = 14, color = "purple", size = 8, family = "Times", label = "y = 0.03895x - 1.27212; P = 0.47") +
+    theme(
+      plot.title = element_text(size = 24, family = "Times"),
+      axis.title = element_text(size = 20, family = "Times"),
+      axis.text = element_text(size = 16, family = "Times")
+    ) +
+    scale_y_continuous(limits = c(-15,15))
+
+```
+
+# right quarter reliability
+```{r}
+rt_qt_3dc <- measures5 %>%
+  filter(Initials == "IB") %>%
+  select(ID, Day, Right_Quarter, rt_qt_3d)
+
+rt_qt_3dc2 <- rt_qt_3dc %>%
+  select(Right_Quarter, rt_qt_3d)
+
+icc(rt_qt_3dc2, model = "twoway", type = "consistency", unit = "average")
+```
+
+#right quarter agreement
+```{r}
+blandr.statistics(rt_qt_3dc$Right_Quarter, rt_qt_3dc$rt_qt_3d, sig.level = .95)
+```
+
+```{r}
+blandr.draw(rt_qt_3dc$Right_Quarter, rt_qt_3dc$rt_qt_3d, sig.level = .95)
+```
+
+#linear regression
+```{r}
+set.seed(123)
+vab <- agree_reps(y = "Right_Quarter",
+              x = "rt_qt_3d",
+              id = "ID",
+              data = rt_qt_3dc,
+              agree.level = .8)
+
+rt_qt_3dc$avg=rowMeans(rt_qt_3dc[,c(3,4)])
+rt_qt_3dc$diff=rt_qt_3dc$Right_Quarter-rt_qt_3dc$rt_qt_3d
+
+mean_diff=mean(rt_qt_3dc$diff)
+lower=mean_diff - 1.96*sd(rt_qt_3dc$diff)
+upper=mean_diff + 1.96*sd(rt_qt_3dc$diff)
+
+summary(lm(diff~avg,rt_qt_3dc))
+
+FitModel<-lm(diff~avg,rt_qt_3dc)
+shapiro.test(resid(FitModel))
+```
+
+
+#right quarter obs c
+Bias:  0.7464091 
+Bias- upper 95% CI:  1.245135 
+Bias- lower 95% CI:  0.247683 
+
+Upper limit of agreement:  5.919117 
+Upper LOA- upper 95% CI:  6.774014 
+Upper LOA- lower 95% CI:  5.06422 
+
+Lower limit of agreement:  -4.426299 
+Lower LOA- upper 95% CI:  -3.571402 
+Lower LOA- lower 95% CI:  -5.281196
+Coefficients:
+            Estimate Std. Error t value Pr(>|t|)  
+(Intercept) -1.94004    1.20714  -1.607    0.111  
+avg          0.14219    0.06254   2.274    0.025 *
+
+```{r}
+rt_qt_3dc3 <- rt_qt_3dc %>%
+  mutate(
+  point_color =  case_when(
+     diff >= 5.919117 ~ "#E7298A",
+    diff < 5.919117 & diff >= -4.426299 ~ "black",
+      diff < -4.426299 ~ "#E7298A",
+      .default = "NA"
+    )
+  )
+
+RC <- rt_qt_3dc3 %>%
+ ggplot(aes(x = avg, y = diff, colour = point_color)) +
+  geom_point(aes(x = avg, y = diff, colour = point_color, size = 1, alpha = 0.75, position = "jitter")) +
+  geom_smooth(aes(x = avg, y = diff),
+    method="lm",
+    se=FALSE,
+    color = "purple",
+    size = 1.5
+    ) +
+  scale_color_identity(labels = c("Outside of ULOA and LLOA", "Within LOA")) +
+  geom_hline(yintercept = 0.7464091, color = "darkslateblue") +
+  geom_hline(yintercept =  1.245135,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 0.247683,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 5.919117, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept =  6.774014,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = 5.06422,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -4.426299, linetype = "dashed", color = "darkslateblue") +
+  geom_hline(yintercept = -3.571402,linetype="dotted", color = "darkslateblue") +
+  geom_hline(yintercept = -5.281196,linetype="dotted", color = "darkslateblue") +
+  theme_classic() +
+  ggtitle("Observer C: Right Quarter") +
+  xlab("Average (cm)") +
+  ylab("Difference (cm)") +
+  guides(alpha = FALSE, size = FALSE) +
+  annotate("text", x = 21, y = 14, color = "purple", size = 8, family = "Times", label = "y = 0.14219x - 1.94004; P = 0.03") +
+    theme(
+      plot.title = element_text(size = 24, family = "Times"),
+      axis.title = element_text(size = 20, family = "Times"),
+      axis.text = element_text(size = 16, family = "Times")
+    ) +
+    scale_y_continuous(limits = c(-15,15))
+
+```
+#the end! 
